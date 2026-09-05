@@ -1,0 +1,2700 @@
+local REPOSITORY =
+    "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+
+local function loadRemote(path)
+    local ok, source = pcall(game.HttpGet, game, REPOSITORY .. path)
+
+    assert(
+        ok and type(source) == "string",
+        "Не удалось загрузить: " .. tostring(path)
+    )
+
+    local chunk, compileError = loadstring(source, "=" .. path)
+
+    assert(
+        chunk,
+        "Ошибка компиляции " .. tostring(path) .. ": " .. tostring(compileError)
+    )
+
+    local runOk, result = pcall(chunk)
+
+    assert(
+        runOk,
+        "Ошибка выполнения " .. tostring(path) .. ": " .. tostring(result)
+    )
+
+    return result
+end
+
+local Library = loadRemote("Library.lua")
+local ThemeManager = loadRemote("addons/ThemeManager.lua")
+local SaveManager = loadRemote("addons/SaveManager.lua")
+
+local Options = Library.Options
+local Toggles = Library.Toggles
+
+Library.ForceCheckbox = false
+Library.ShowToggleFrameInKeybinds = true
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Environment = getgenv and getgenv() or _G
+
+local Capabilities = {
+    newcclosure = type(Environment.newcclosure) == "function"
+        and Environment.newcclosure
+        or function(callback)
+            return callback
+        end,
+
+    checkcaller = type(Environment.checkcaller) == "function"
+        and Environment.checkcaller
+        or nil,
+
+    hookmetamethod = type(Environment.hookmetamethod) == "function"
+        and Environment.hookmetamethod
+        or nil,
+
+    getnamecallmethod = type(Environment.getnamecallmethod) == "function"
+        and Environment.getnamecallmethod
+        or nil,
+
+    hookfunction = type(Environment.hookfunction) == "function"
+        and Environment.hookfunction
+        or nil,
+
+    getgc = type(Environment.getgc) == "function"
+        and Environment.getgc
+        or nil,
+
+    islclosure = type(Environment.islclosure) == "function"
+        and Environment.islclosure
+        or nil,
+
+    setreadonly = type(Environment.setreadonly) == "function"
+        and Environment.setreadonly
+        or nil,
+
+    isreadonly = type(Environment.isreadonly) == "function"
+        and Environment.isreadonly
+        or nil,
+
+    mouse1click = type(Environment.mouse1click) == "function"
+        and Environment.mouse1click
+        or nil,
+
+    mouse1press = type(Environment.mouse1press) == "function"
+        and Environment.mouse1press
+        or nil,
+
+    mouse1release = type(Environment.mouse1release) == "function"
+        and Environment.mouse1release
+        or nil,
+}
+
+local mathAbs = math.abs
+local mathClamp = math.clamp
+local mathFloor = math.floor
+local mathHuge = math.huge
+local mathMax = math.max
+local mathMin = math.min
+
+local Vector2New = Vector2.new
+local Vector3New = Vector3.new
+
+local typeof = typeof
+local pairs = pairs
+local ipairs = ipairs
+local next = next
+local pcall = pcall
+
+local osClock = os.clock
+local taskSpawn = task.spawn
+local taskDelay = task.delay
+
+local LibraryUnloaded = false
+local CleanupPerformed = false
+
+local Connections = {}
+
+local function addConnection(connection)
+    Connections[#Connections + 1] = connection
+    return connection
+end
+
+local function disconnectConnections()
+    for i = #Connections, 1, -1 do
+        local connection = Connections[i]
+
+        if connection then
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+
+        Connections[i] = nil
+    end
+end
+
+local DrawingOK = pcall(function()
+    local object = Drawing.new("Line")
+    object:Remove()
+end)
+
+local cachedCharacter = LocalPlayer.Character
+local cachedHumanoid = nil
+local cachedRoot = nil
+
+local function updateCharacterCache(character)
+    cachedCharacter = character
+    cachedHumanoid = nil
+    cachedRoot = nil
+
+    if not character then
+        return
+    end
+
+    cachedHumanoid = character:FindFirstChildWhichIsA("Humanoid")
+    cachedRoot = character:FindFirstChild("HumanoidRootPart")
+
+    taskSpawn(function()
+        local humanoid = character:WaitForChild("Humanoid", 15)
+        local root = character:WaitForChild("HumanoidRootPart", 15)
+
+        if cachedCharacter == character then
+            cachedHumanoid = humanoid
+            cachedRoot = root
+        end
+    end)
+end
+
+addConnection(LocalPlayer.CharacterAdded:Connect(updateCharacterCache))
+
+addConnection(LocalPlayer.CharacterRemoving:Connect(function(character)
+    if cachedCharacter == character then
+        cachedCharacter = nil
+        cachedHumanoid = nil
+        cachedRoot = nil
+    end
+end))
+
+if cachedCharacter then
+    updateCharacterCache(cachedCharacter)
+end
+
+local playerCache = {}
+local espCache = {}
+local removeESP
+
+local function addPlayer(player)
+    if player ~= LocalPlayer then
+        playerCache[player] = true
+    end
+end
+
+local function removePlayer(player)
+    playerCache[player] = nil
+
+    if removeESP then
+        removeESP(player)
+    end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    addPlayer(player)
+end
+
+addConnection(Players.PlayerAdded:Connect(addPlayer))
+addConnection(Players.PlayerRemoving:Connect(removePlayer))
+
+local function distanceSquared2D(a, b)
+    local x = a.X - b.X
+    local y = a.Y - b.Y
+
+    return x * x + y * y
+end
+
+local function distanceSquared3D(a, b)
+    local x = a.X - b.X
+    local y = a.Y - b.Y
+    local z = a.Z - b.Z
+
+    return x * x + y * y + z * z
+end
+
+local function isAliveCharacter(character)
+    if not character or not character.Parent then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+
+    return humanoid ~= nil and humanoid.Health > 0
+end
+
+local function isValidTargetPart(part)
+    return part
+        and part:IsA("BasePart")
+        and part:IsDescendantOf(Workspace)
+        and isAliveCharacter(part.Parent)
+end
+
+local function getTargetPart(character, requestedPart)
+    if not character then
+        return nil
+    end
+
+    local part = character:FindFirstChild(requestedPart)
+
+    if not part or not part:IsA("BasePart") then
+        part = character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("Head")
+            or character:FindFirstChildWhichIsA("BasePart")
+    end
+
+    return part
+end
+
+local function isTeammate(player)
+    if not player then
+        return false
+    end
+
+    if LocalPlayer.Team == nil or player.Team == nil then
+        return false
+    end
+
+    return LocalPlayer.Team == player.Team
+end
+
+local function getPlayerTeamColor(player)
+    if player and player.Team then
+        local teamColor = player.Team.TeamColor
+
+        if teamColor then
+            return teamColor.Color
+        end
+    end
+
+    return nil
+end
+
+local function getScreenCenter()
+    local camera = Workspace.CurrentCamera
+
+    if not camera then
+        return Vector2New(0, 0)
+    end
+
+    local viewport = camera.ViewportSize
+
+    return Vector2New(viewport.X * 0.5, viewport.Y * 0.5)
+end
+
+local ignoredWorkspaceNames = {
+    Viewmodel = true,
+    ViewModel = true,
+    Ignore = true,
+    Debris = true,
+    BulletTraces = true,
+    Effects = true,
+    GunEffects = true,
+    Arms = true,
+    FPSArms = true,
+    Particles = true,
+    Bullets = true,
+    Blood = true,
+    Sparks = true,
+    Smoke = true,
+    Fire = true,
+    Explosion = true,
+    MuzzleFlash = true,
+    Shells = true,
+    Casings = true,
+    Impacts = true,
+    Decals = true,
+}
+
+local staticRaycastIgnore = {}
+
+local function rebuildStaticRaycastIgnore()
+    table.clear(staticRaycastIgnore)
+
+    for _, child in ipairs(Workspace:GetChildren()) do
+        if ignoredWorkspaceNames[child.Name] then
+            staticRaycastIgnore[#staticRaycastIgnore + 1] = child
+        end
+    end
+end
+
+rebuildStaticRaycastIgnore()
+
+addConnection(Workspace.ChildAdded:Connect(function(child)
+    if ignoredWorkspaceNames[child.Name] then
+        rebuildStaticRaycastIgnore()
+    end
+end))
+
+addConnection(Workspace.ChildRemoved:Connect(function(child)
+    if ignoredWorkspaceNames[child.Name] then
+        rebuildStaticRaycastIgnore()
+    end
+end))
+
+local function buildRaycastIgnore()
+    local ignore = {}
+
+    if cachedCharacter then
+        ignore[#ignore + 1] = cachedCharacter
+    end
+
+    local camera = Workspace.CurrentCamera
+
+    if camera then
+        ignore[#ignore + 1] = camera
+    end
+
+    for i = 1, #staticRaycastIgnore do
+        local instance = staticRaycastIgnore[i]
+
+        if instance and instance.Parent then
+            ignore[#ignore + 1] = instance
+        end
+    end
+
+    return ignore
+end
+
+local function isVisibleFrom(origin, targetPart)
+    if not isValidTargetPart(targetPart) then
+        return false
+    end
+
+    if typeof(origin) ~= "Vector3" then
+        return false
+    end
+
+    local direction = targetPart.Position - origin
+
+    if direction.Magnitude <= 0.001 then
+        return true
+    end
+
+    local parameters = RaycastParams.new()
+    parameters.FilterType = Enum.RaycastFilterType.Exclude
+    parameters.FilterDescendantsInstances = buildRaycastIgnore()
+    parameters.IgnoreWater = true
+    parameters.RespectCanCollide = false
+
+    local result = Workspace:Raycast(origin, direction, parameters)
+
+    if not result then
+        return true
+    end
+
+    local hit = result.Instance
+    local targetCharacter = targetPart.Parent
+
+    return hit == targetPart
+        or hit:IsDescendantOf(targetCharacter)
+end
+
+local function isVisible(targetPart)
+    local camera = Workspace.CurrentCamera
+
+    if not camera then
+        return false
+    end
+
+    return isVisibleFrom(camera.CFrame.Position, targetPart)
+end
+
+local visibilityPartNames = {
+    "Head",
+    "HumanoidRootPart",
+    "UpperTorso",
+    "Torso",
+    "LowerTorso",
+}
+
+local function isCharacterVisible(character)
+    if not character then
+        return false
+    end
+
+    for i = 1, #visibilityPartNames do
+        local part = character:FindFirstChild(visibilityPartNames[i])
+
+        if part and part:IsA("BasePart") and isVisible(part) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local ESP = {
+    Options = {
+        Enabled = false,
+        Box = false,
+        BoxFill = false,
+        Name = false,
+        Distance = false,
+        HealthBar = false,
+        Chams = false,
+        TeamColor = false,
+        IgnoreTeam = false,
+    },
+
+    Colors = {
+        Box = Color3.fromRGB(255, 255, 255),
+        BoxFill = Color3.fromRGB(255, 255, 255),
+        Name = Color3.fromRGB(255, 255, 255),
+        Distance = Color3.fromRGB(255, 255, 255),
+        ChamsVisible = Color3.fromRGB(0, 255, 0),
+        ChamsHidden = Color3.fromRGB(255, 0, 0),
+    },
+
+    Settings = {
+        MaxDistance = 10000,
+        MaxDistanceSquared = 100000000,
+        FillTransparency = 0.7,
+        VisibilityInterval = 0.1,
+    },
+}
+
+local function createESP()
+    if not DrawingOK then
+        return nil
+    end
+
+    local object = {}
+
+    object.BoxFill = Drawing.new("Square")
+    object.BoxFill.Visible = false
+    object.BoxFill.Filled = true
+    object.BoxFill.Thickness = 0
+    object.BoxFill.Transparency = ESP.Settings.FillTransparency
+
+    object.BoxOutline = Drawing.new("Square")
+    object.BoxOutline.Visible = false
+    object.BoxOutline.Filled = false
+    object.BoxOutline.Thickness = 4
+    object.BoxOutline.Transparency = 1
+    object.BoxOutline.Color = Color3.new(0, 0, 0)
+
+    object.Box = Drawing.new("Square")
+    object.Box.Visible = false
+    object.Box.Filled = false
+    object.Box.Thickness = 2
+    object.Box.Transparency = 1
+
+    object.Name = Drawing.new("Text")
+    object.Name.Visible = false
+    object.Name.Center = true
+    object.Name.Outline = true
+    object.Name.Size = 13
+    object.Name.Font = 2
+
+    object.Distance = Drawing.new("Text")
+    object.Distance.Visible = false
+    object.Distance.Center = true
+    object.Distance.Outline = true
+    object.Distance.Size = 13
+    object.Distance.Font = 2
+
+    object.HealthBackground = Drawing.new("Square")
+    object.HealthBackground.Visible = false
+    object.HealthBackground.Filled = true
+    object.HealthBackground.Color = Color3.new(0, 0, 0)
+    object.HealthBackground.Transparency = 0.5
+
+    object.Health = Drawing.new("Square")
+    object.Health.Visible = false
+    object.Health.Filled = true
+    object.Health.Transparency = 1
+
+    object.Highlight = nil
+    object.LastVisibilityCheck = 0
+    object.VisibleNow = false
+
+    return object
+end
+
+local function hideESP(object, destroyHighlight)
+    if not object then
+        return
+    end
+
+    local drawingNames = {
+        "BoxFill",
+        "BoxOutline",
+        "Box",
+        "Name",
+        "Distance",
+        "HealthBackground",
+        "Health",
+    }
+
+    for i = 1, #drawingNames do
+        local drawing = object[drawingNames[i]]
+
+        if drawing then
+            drawing.Visible = false
+        end
+    end
+
+    if destroyHighlight and object.Highlight then
+        pcall(function()
+            object.Highlight:Destroy()
+        end)
+
+        object.Highlight = nil
+    end
+end
+
+removeESP = function(player)
+    local object = espCache[player]
+
+    if not object then
+        return
+    end
+
+    local drawingNames = {
+        "BoxFill",
+        "BoxOutline",
+        "Box",
+        "Name",
+        "Distance",
+        "HealthBackground",
+        "Health",
+    }
+
+    for i = 1, #drawingNames do
+        local drawing = object[drawingNames[i]]
+
+        if drawing then
+            pcall(function()
+                drawing:Remove()
+            end)
+        end
+    end
+
+    if object.Highlight then
+        pcall(function()
+            object.Highlight:Destroy()
+        end)
+    end
+
+    espCache[player] = nil
+end
+
+local function getCharacterScreenBox(character, camera)
+    local ok, boxCFrame, boxSize = pcall(character.GetBoundingBox, character)
+
+    if not ok then
+        return nil
+    end
+
+    local half = boxSize * 0.5
+
+    local corners = {
+        Vector3New(-half.X, -half.Y, -half.Z),
+        Vector3New(-half.X, -half.Y, half.Z),
+        Vector3New(-half.X, half.Y, -half.Z),
+        Vector3New(-half.X, half.Y, half.Z),
+        Vector3New(half.X, -half.Y, -half.Z),
+        Vector3New(half.X, -half.Y, half.Z),
+        Vector3New(half.X, half.Y, -half.Z),
+        Vector3New(half.X, half.Y, half.Z),
+    }
+
+    local minX = mathHuge
+    local minY = mathHuge
+    local maxX = -mathHuge
+    local maxY = -mathHuge
+    local pointFound = false
+
+    for i = 1, #corners do
+        local worldPoint = boxCFrame:PointToWorldSpace(corners[i])
+        local screenPoint = camera:WorldToViewportPoint(worldPoint)
+
+        if screenPoint.Z > 0 then
+            pointFound = true
+            minX = mathMin(minX, screenPoint.X)
+            minY = mathMin(minY, screenPoint.Y)
+            maxX = mathMax(maxX, screenPoint.X)
+            maxY = mathMax(maxY, screenPoint.Y)
+        end
+    end
+
+    if not pointFound then
+        return nil
+    end
+
+    return minX, minY, maxX - minX, maxY - minY
+end
+
+local function updateESP()
+    if LibraryUnloaded then
+        return
+    end
+
+    if not ESP.Options.Enabled then
+        for _, object in pairs(espCache) do
+            hideESP(object, true)
+        end
+
+        return
+    end
+
+    if not DrawingOK then
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+
+    if not camera then
+        return
+    end
+
+    local now = osClock()
+    local localRoot = cachedRoot
+
+    for player in next, playerCache do
+        if ESP.Options.IgnoreTeam and isTeammate(player) then
+            if espCache[player] then
+                hideESP(espCache[player], true)
+            end
+
+            continue
+        end
+
+        local character = player.Character
+
+        if not isAliveCharacter(character) then
+            if espCache[player] then
+                hideESP(espCache[player], true)
+            end
+
+            continue
+        end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+
+        if not root or not humanoid then
+            if espCache[player] then
+                hideESP(espCache[player], true)
+            end
+
+            continue
+        end
+
+        if localRoot
+            and distanceSquared3D(localRoot.Position, root.Position)
+                > ESP.Settings.MaxDistanceSquared
+        then
+            if espCache[player] then
+                hideESP(espCache[player], true)
+            end
+
+            continue
+        end
+
+        local boxX, boxY, boxWidth, boxHeight =
+            getCharacterScreenBox(character, camera)
+
+        if not boxX or boxWidth <= 1 or boxHeight <= 1 then
+            if espCache[player] then
+                hideESP(espCache[player], false)
+            end
+
+            continue
+        end
+
+        local object = espCache[player]
+
+        if not object then
+            object = createESP()
+            espCache[player] = object
+        end
+
+        if not object then
+            continue
+        end
+
+        local centerX = boxX + boxWidth * 0.5
+        local teamColor = ESP.Options.TeamColor
+            and getPlayerTeamColor(player)
+            or nil
+
+        local boxColor = teamColor or ESP.Colors.Box
+        local fillColor = teamColor or ESP.Colors.BoxFill
+        local nameColor = teamColor or ESP.Colors.Name
+        local distanceColor = teamColor or ESP.Colors.Distance
+
+        if ESP.Options.Box then
+            object.BoxOutline.Visible = true
+            object.BoxOutline.Position = Vector2New(boxX, boxY)
+            object.BoxOutline.Size = Vector2New(boxWidth, boxHeight)
+
+            object.Box.Visible = true
+            object.Box.Position = Vector2New(boxX, boxY)
+            object.Box.Size = Vector2New(boxWidth, boxHeight)
+            object.Box.Color = boxColor
+
+            object.BoxFill.Visible = ESP.Options.BoxFill
+            object.BoxFill.Position = Vector2New(boxX, boxY)
+            object.BoxFill.Size = Vector2New(boxWidth, boxHeight)
+            object.BoxFill.Color = fillColor
+            object.BoxFill.Transparency = ESP.Settings.FillTransparency
+        else
+            object.BoxOutline.Visible = false
+            object.Box.Visible = false
+            object.BoxFill.Visible = false
+        end
+
+        if ESP.Options.Name then
+            object.Name.Visible = true
+            object.Name.Position = Vector2New(centerX, boxY - 16)
+            object.Name.Text = player.DisplayName
+            object.Name.Color = nameColor
+        else
+            object.Name.Visible = false
+        end
+
+        if ESP.Options.Distance and localRoot then
+            local distance =
+                (localRoot.Position - root.Position).Magnitude
+
+            object.Distance.Visible = true
+            object.Distance.Position =
+                Vector2New(centerX, boxY + boxHeight + 2)
+            object.Distance.Text = tostring(mathFloor(distance)) .. "m"
+            object.Distance.Color = distanceColor
+        else
+            object.Distance.Visible = false
+        end
+
+        if ESP.Options.HealthBar then
+            local healthFraction = mathClamp(
+                humanoid.Health / mathMax(humanoid.MaxHealth, 1),
+                0,
+                1
+            )
+
+            local barX = boxX - 6
+            local barWidth = 3
+
+            object.HealthBackground.Visible = true
+            object.HealthBackground.Position = Vector2New(barX, boxY)
+            object.HealthBackground.Size =
+                Vector2New(barWidth, boxHeight)
+
+            object.Health.Visible = true
+            object.Health.Position = Vector2New(
+                barX,
+                boxY + boxHeight * (1 - healthFraction)
+            )
+            object.Health.Size =
+                Vector2New(barWidth, boxHeight * healthFraction)
+
+            object.Health.Color = Color3.fromRGB(
+                255 * (1 - healthFraction),
+                255 * healthFraction,
+                0
+            )
+        else
+            object.HealthBackground.Visible = false
+            object.Health.Visible = false
+        end
+
+        if ESP.Options.Chams then
+            if now - object.LastVisibilityCheck
+                >= ESP.Settings.VisibilityInterval
+            then
+                object.LastVisibilityCheck = now
+                object.VisibleNow = isCharacterVisible(character)
+            end
+
+            local highlightColor
+
+            if teamColor then
+                highlightColor = teamColor
+            elseif object.VisibleNow then
+                highlightColor = ESP.Colors.ChamsVisible
+            else
+                highlightColor = ESP.Colors.ChamsHidden
+            end
+
+            if not object.Highlight or not object.Highlight.Parent then
+                if object.Highlight then
+                    pcall(function()
+                        object.Highlight:Destroy()
+                    end)
+                end
+
+                local highlight = Instance.new("Highlight")
+                highlight.Name = "PotyziumHighlight"
+                highlight.Adornee = character
+                highlight.FillTransparency = 0.5
+                highlight.OutlineTransparency = 0.8
+                highlight.DepthMode =
+                    Enum.HighlightDepthMode.AlwaysOnTop
+                highlight.FillColor = highlightColor
+                highlight.Parent = character
+
+                object.Highlight = highlight
+            else
+                object.Highlight.Adornee = character
+                object.Highlight.FillColor = highlightColor
+            end
+        elseif object.Highlight then
+            pcall(function()
+                object.Highlight:Destroy()
+            end)
+
+            object.Highlight = nil
+        end
+    end
+end
+
+function ESP:Destroy()
+    for player in pairs(espCache) do
+        removeESP(player)
+    end
+
+    table.clear(espCache)
+end
+
+local SilentAim = {
+    Options = {
+        Enabled = false,
+        UseFOV = false,
+        WallCheck = false,
+        IgnoreTeam = true,
+        Priority = "Crosshair",
+        Snapline = false,
+        TargetHUD = false,
+        FOVMode = "Dynamic",
+    },
+
+    Settings = {
+        TargetPart = "HumanoidRootPart",
+        FOVRadius = 150,
+        FOVRadiusSquared = 22500,
+        MaxDistance = 500,
+        MaxDistanceSquared = 250000,
+        SnaplineThickness = 2,
+        FOVThickness = 2,
+    },
+
+    Colors = {
+        FOV = Color3.fromRGB(255, 255, 255),
+        FOVNoTarget = Color3.fromRGB(255, 0, 0),
+        FOVOnTarget = Color3.fromRGB(0, 255, 0),
+        Snapline = Color3.fromRGB(255, 255, 255),
+    },
+}
+
+local RageBot = {
+    Options = {
+        Enabled = false,
+        AutoFire = false,
+        VisibleCheck = true,
+        IgnoreTeam = true,
+        MaxDistance = 500,
+        MaxDistanceSquared = 250000,
+    },
+
+    Settings = {
+        TargetPart = "Head",
+        AutoFireRPM = 600,
+        InputMode = "Hybrid",
+        HoldTime = 0.02,
+    },
+}
+
+local CurrentAimTarget = nil
+local RageBotTarget = nil
+
+local function getClosestSilentTarget()
+    local camera = Workspace.CurrentCamera
+
+    if not camera then
+        return nil
+    end
+
+    local center = getScreenCenter()
+    local localPosition = cachedRoot and cachedRoot.Position or nil
+
+    local bestPart = nil
+    local bestScore = nil
+
+    for player in next, playerCache do
+        if SilentAim.Options.IgnoreTeam and isTeammate(player) then
+            continue
+        end
+
+        local character = player.Character
+
+        if not isAliveCharacter(character) then
+            continue
+        end
+
+        local part = getTargetPart(
+            character,
+            SilentAim.Settings.TargetPart
+        )
+
+        if not isValidTargetPart(part) then
+            continue
+        end
+
+        if localPosition
+            and distanceSquared3D(localPosition, part.Position)
+                > SilentAim.Settings.MaxDistanceSquared
+        then
+            continue
+        end
+
+        local viewportPoint, onScreen =
+            camera:WorldToViewportPoint(part.Position)
+
+        if not onScreen or viewportPoint.Z <= 0 then
+            continue
+        end
+
+        local screenPosition =
+            Vector2New(viewportPoint.X, viewportPoint.Y)
+
+        local screenDistanceSquared =
+            distanceSquared2D(center, screenPosition)
+
+        if SilentAim.Options.UseFOV
+            and screenDistanceSquared
+                > SilentAim.Settings.FOVRadiusSquared
+        then
+            continue
+        end
+
+        if SilentAim.Options.WallCheck and not isVisible(part) then
+            continue
+        end
+
+        local score
+
+        if SilentAim.Options.Priority == "Distance" and localPosition then
+            score = distanceSquared3D(localPosition, part.Position)
+        else
+            score = screenDistanceSquared
+        end
+
+        if not bestScore or score < bestScore then
+            bestPart = part
+            bestScore = score
+        end
+    end
+
+    return bestPart
+end
+
+local function getRageBotTarget()
+    local localPosition = cachedRoot and cachedRoot.Position or nil
+
+    if not localPosition then
+        return nil
+    end
+
+    local bestPart = nil
+    local bestDistance = RageBot.Options.MaxDistanceSquared
+
+    for player in next, playerCache do
+        if RageBot.Options.IgnoreTeam and isTeammate(player) then
+            continue
+        end
+
+        local character = player.Character
+
+        if not isAliveCharacter(character) then
+            continue
+        end
+
+        local part = getTargetPart(
+            character,
+            RageBot.Settings.TargetPart
+        )
+
+        if not isValidTargetPart(part) then
+            continue
+        end
+
+        local distance =
+            distanceSquared3D(localPosition, part.Position)
+
+        if distance > RageBot.Options.MaxDistanceSquared then
+            continue
+        end
+
+        if RageBot.Options.VisibleCheck and not isVisible(part) then
+            continue
+        end
+
+        if distance < bestDistance then
+            bestDistance = distance
+            bestPart = part
+        end
+    end
+
+    return bestPart
+end
+
+local fovScreenGui = Instance.new("ScreenGui")
+fovScreenGui.Name = "PotyziumFOV"
+fovScreenGui.ResetOnSpawn = false
+fovScreenGui.IgnoreGuiInset = true
+fovScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+fovScreenGui.Parent = CoreGui
+
+local fovCircle = Instance.new("Frame")
+fovCircle.Name = "Circle"
+fovCircle.AnchorPoint = Vector2New(0.5, 0.5)
+fovCircle.Position = UDim2.fromScale(0.5, 0.5)
+fovCircle.Size = UDim2.fromOffset(
+    SilentAim.Settings.FOVRadius * 2,
+    SilentAim.Settings.FOVRadius * 2
+)
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.Visible = false
+fovCircle.Parent = fovScreenGui
+
+local fovCorner = Instance.new("UICorner")
+fovCorner.CornerRadius = UDim.new(1, 0)
+fovCorner.Parent = fovCircle
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Thickness = SilentAim.Settings.FOVThickness
+fovStroke.Color = SilentAim.Colors.FOV
+fovStroke.Transparency = 0
+fovStroke.Parent = fovCircle
+
+local snapline = nil
+
+if DrawingOK then
+    snapline = Drawing.new("Line")
+    snapline.Visible = false
+    snapline.Thickness = SilentAim.Settings.SnaplineThickness
+    snapline.Color = SilentAim.Colors.Snapline
+    snapline.Transparency = 1
+    snapline.ZIndex = 2
+end
+
+local function updateFOV()
+    if not fovCircle or not fovCircle.Parent then
+        return
+    end
+
+    local visible =
+        SilentAim.Options.Enabled and SilentAim.Options.UseFOV
+
+    fovCircle.Visible = visible
+
+    if not visible then
+        return
+    end
+
+    local diameter = SilentAim.Settings.FOVRadius * 2
+
+    fovCircle.Size = UDim2.fromOffset(diameter, diameter)
+    fovStroke.Thickness = SilentAim.Settings.FOVThickness
+
+    if SilentAim.Options.FOVMode == "Dynamic" then
+        fovStroke.Color = CurrentAimTarget
+            and SilentAim.Colors.FOVOnTarget
+            or SilentAim.Colors.FOVNoTarget
+    else
+        fovStroke.Color = SilentAim.Colors.FOV
+    end
+end
+
+local function updateSnapline()
+    if not snapline then
+        return
+    end
+
+    if not SilentAim.Options.Enabled
+        or not SilentAim.Options.Snapline
+        or not isValidTargetPart(CurrentAimTarget)
+    then
+        snapline.Visible = false
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+
+    if not camera then
+        snapline.Visible = false
+        return
+    end
+
+    local viewportPoint, onScreen =
+        camera:WorldToViewportPoint(CurrentAimTarget.Position)
+
+    if not onScreen or viewportPoint.Z <= 0 then
+        snapline.Visible = false
+        return
+    end
+
+    snapline.Visible = true
+    snapline.From = getScreenCenter()
+    snapline.To = Vector2New(viewportPoint.X, viewportPoint.Y)
+    snapline.Color = SilentAim.Colors.Snapline
+    snapline.Thickness = SilentAim.Settings.SnaplineThickness
+end
+
+local TargetGui = Instance.new("ScreenGui")
+TargetGui.Name = "PotyziumTargetHUD"
+TargetGui.ResetOnSpawn = false
+TargetGui.IgnoreGuiInset = true
+TargetGui.Enabled = false
+TargetGui.Parent = CoreGui
+
+local TargetFrame = Instance.new("Frame")
+TargetFrame.Size = UDim2.fromOffset(320, 90)
+TargetFrame.AnchorPoint = Vector2New(0.5, 0.5)
+TargetFrame.Position = UDim2.fromScale(0.5, 0.85)
+TargetFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+TargetFrame.BackgroundTransparency = 0.1
+TargetFrame.BorderSizePixel = 0
+TargetFrame.Parent = TargetGui
+
+local TargetCorner = Instance.new("UICorner")
+TargetCorner.CornerRadius = UDim.new(0, 6)
+TargetCorner.Parent = TargetFrame
+
+local AvatarImage = Instance.new("ImageLabel")
+AvatarImage.Size = UDim2.fromOffset(60, 60)
+AvatarImage.Position = UDim2.fromOffset(15, 15)
+AvatarImage.BackgroundTransparency = 1
+AvatarImage.Parent = TargetFrame
+
+local NameLabel = Instance.new("TextLabel")
+NameLabel.Size = UDim2.new(1, -100, 0, 25)
+NameLabel.Position = UDim2.fromOffset(85, 10)
+NameLabel.BackgroundTransparency = 1
+NameLabel.Font = Enum.Font.GothamBold
+NameLabel.TextSize = 20
+NameLabel.TextColor3 = Color3.new(1, 1, 1)
+NameLabel.TextXAlignment = Enum.TextXAlignment.Left
+NameLabel.Text = ""
+NameLabel.Parent = TargetFrame
+
+local DistanceLabel = Instance.new("TextLabel")
+DistanceLabel.Size = UDim2.new(1, -100, 0, 20)
+DistanceLabel.Position = UDim2.fromOffset(85, 35)
+DistanceLabel.BackgroundTransparency = 1
+DistanceLabel.Font = Enum.Font.Gotham
+DistanceLabel.TextSize = 16
+DistanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+DistanceLabel.TextXAlignment = Enum.TextXAlignment.Left
+DistanceLabel.Text = ""
+DistanceLabel.Parent = TargetFrame
+
+local HealthBackground = Instance.new("Frame")
+HealthBackground.Size = UDim2.new(1, -30, 0, 12)
+HealthBackground.Position = UDim2.new(0, 15, 1, -20)
+HealthBackground.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+HealthBackground.BorderSizePixel = 0
+HealthBackground.Parent = TargetFrame
+
+local HealthFill = Instance.new("Frame")
+HealthFill.Size = UDim2.fromScale(1, 1)
+HealthFill.BackgroundColor3 = Color3.new(1, 1, 1)
+HealthFill.BorderSizePixel = 0
+HealthFill.Parent = HealthBackground
+
+local HealthGradient = Instance.new("UIGradient")
+HealthGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(
+        0,
+        Color3.fromRGB(255, 60, 150)
+    ),
+    ColorSequenceKeypoint.new(
+        1,
+        Color3.fromRGB(255, 230, 50)
+    ),
+})
+HealthGradient.Parent = HealthFill
+
+local thumbnailCache = {}
+local displayedUserId = nil
+local lastHUDUpdate = 0
+local currentHealthTween = nil
+
+local function setTargetThumbnail(player)
+    if not player then
+        displayedUserId = nil
+        AvatarImage.Image = ""
+        return
+    end
+
+    displayedUserId = player.UserId
+
+    if thumbnailCache[player.UserId] then
+        AvatarImage.Image = thumbnailCache[player.UserId]
+        return
+    end
+
+    AvatarImage.Image = ""
+
+    taskSpawn(function()
+        local ok, image = pcall(
+            Players.GetUserThumbnailAsync,
+            Players,
+            player.UserId,
+            Enum.ThumbnailType.HeadShot,
+            Enum.ThumbnailSize.Size150x150
+        )
+
+        if not ok then
+            return
+        end
+
+        thumbnailCache[player.UserId] = image
+
+        if displayedUserId == player.UserId
+            and AvatarImage
+            and AvatarImage.Parent
+        then
+            AvatarImage.Image = image
+        end
+    end)
+end
+
+local lastHUDPlayer = nil
+
+local function updateTargetHUD(now)
+    if not SilentAim.Options.TargetHUD
+        or not SilentAim.Options.Enabled
+    then
+        TargetGui.Enabled = false
+        lastHUDPlayer = nil
+        return
+    end
+
+    if now - lastHUDUpdate < 0.1 then
+        return
+    end
+
+    lastHUDUpdate = now
+
+    if not isValidTargetPart(CurrentAimTarget) then
+        TargetGui.Enabled = false
+        lastHUDPlayer = nil
+        return
+    end
+
+    local character = CurrentAimTarget.Parent
+    local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+
+    if not humanoid or humanoid.Health <= 0 then
+        TargetGui.Enabled = false
+        return
+    end
+
+    TargetGui.Enabled = true
+
+    local player = Players:GetPlayerFromCharacter(character)
+
+    if player then
+        NameLabel.Text = player.DisplayName
+
+        if player ~= lastHUDPlayer then
+            lastHUDPlayer = player
+            setTargetThumbnail(player)
+        end
+    else
+        NameLabel.Text = character.Name
+
+        if lastHUDPlayer ~= false then
+            lastHUDPlayer = false
+            setTargetThumbnail(nil)
+        end
+    end
+
+    if cachedRoot and root then
+        DistanceLabel.Text = string.format(
+            "Distance: %.1fm",
+            (cachedRoot.Position - root.Position).Magnitude
+        )
+    else
+        DistanceLabel.Text = "Distance: N/A"
+    end
+
+    local healthFraction = mathClamp(
+        humanoid.Health / mathMax(humanoid.MaxHealth, 1),
+        0,
+        1
+    )
+
+    if currentHealthTween then
+        pcall(function()
+            currentHealthTween:Cancel()
+        end)
+    end
+
+    currentHealthTween = TweenService:Create(
+        HealthFill,
+        TweenInfo.new(
+            0.1,
+            Enum.EasingStyle.Quad,
+            Enum.EasingDirection.Out
+        ),
+        {
+            Size = UDim2.fromScale(healthFraction, 1),
+        }
+    )
+
+    currentHealthTween:Play()
+end
+
+local lastShotTime = 0
+local fireBusy = false
+local inputHeld = false
+local shotGeneration = 0
+
+local function releaseFireInput()
+    if not inputHeld then
+        return
+    end
+
+    inputHeld = false
+
+    if Capabilities.mouse1release then
+        pcall(Capabilities.mouse1release)
+        return
+    end
+
+    local center = getScreenCenter()
+
+    pcall(
+        VirtualInputManager.SendMouseButtonEvent,
+        VirtualInputManager,
+        center.X,
+        center.Y,
+        0,
+        false,
+        game,
+        0
+    )
+end
+
+local function fireWithMouseClick()
+    if not Capabilities.mouse1click then
+        return false
+    end
+
+    local ok = pcall(Capabilities.mouse1click)
+    return ok
+end
+
+local function fireWithPressedInput()
+    if fireBusy then
+        return false
+    end
+
+    fireBusy = true
+    shotGeneration += 1
+
+    local generation = shotGeneration
+    local pressed = false
+
+    if Capabilities.mouse1press and Capabilities.mouse1release then
+        pressed = pcall(Capabilities.mouse1press)
+    else
+        local center = getScreenCenter()
+
+        pressed = pcall(
+            VirtualInputManager.SendMouseButtonEvent,
+            VirtualInputManager,
+            center.X,
+            center.Y,
+            0,
+            true,
+            game,
+            0
+        )
+    end
+
+    if not pressed then
+        fireBusy = false
+        return false
+    end
+
+    inputHeld = true
+
+    taskDelay(RageBot.Settings.HoldTime, function()
+        if generation ~= shotGeneration then
+            return
+        end
+
+        releaseFireInput()
+        fireBusy = false
+    end)
+
+    return true
+end
+
+local function fireWithTool()
+    local character = cachedCharacter
+
+    if not character then
+        return false
+    end
+
+    local tool = character:FindFirstChildWhichIsA("Tool")
+
+    if not tool then
+        return false
+    end
+
+    return pcall(function()
+        tool:Activate()
+    end)
+end
+
+local function performAutoFire()
+    local mode = RageBot.Settings.InputMode
+
+    if mode == "MouseClick" then
+        return fireWithMouseClick()
+    end
+
+    if mode == "VirtualInput" then
+        return fireWithPressedInput()
+    end
+
+    if mode == "Tool" then
+        return fireWithTool()
+    end
+
+    if fireWithMouseClick() then
+        return true
+    end
+
+    if fireWithPressedInput() then
+        return true
+    end
+
+    return fireWithTool()
+end
+
+local function canAutoFire(target)
+    if LibraryUnloaded then
+        return false
+    end
+
+    if not RageBot.Options.Enabled or not RageBot.Options.AutoFire then
+        return false
+    end
+
+    if not isValidTargetPart(target) then
+        return false
+    end
+
+    if not cachedHumanoid or cachedHumanoid.Health <= 0 then
+        return false
+    end
+
+    local targetPlayer =
+        Players:GetPlayerFromCharacter(target.Parent)
+
+    if RageBot.Options.IgnoreTeam
+        and targetPlayer
+        and isTeammate(targetPlayer)
+    then
+        return false
+    end
+
+    if RageBot.Options.VisibleCheck and not isVisible(target) then
+        return false
+    end
+
+    if cachedRoot
+        and distanceSquared3D(cachedRoot.Position, target.Position)
+            > RageBot.Options.MaxDistanceSquared
+    then
+        return false
+    end
+
+    return true
+end
+
+local function updateAutoFire()
+    local target = RageBotTarget
+
+    if not canAutoFire(target) then
+        if inputHeld then
+            shotGeneration += 1
+            releaseFireInput()
+            fireBusy = false
+        end
+
+        return
+    end
+
+    local rpm = mathMax(RageBot.Settings.AutoFireRPM, 1)
+    local interval = 60 / rpm
+    local now = osClock()
+
+    if now - lastShotTime < interval then
+        return
+    end
+
+    if fireBusy then
+        return
+    end
+
+    if performAutoFire() then
+        lastShotTime = now
+    end
+end
+
+local function updateCombat()
+    if LibraryUnloaded then
+        CurrentAimTarget = nil
+        RageBotTarget = nil
+        return
+    end
+
+    if RageBot.Options.Enabled then
+        RageBotTarget = getRageBotTarget()
+        CurrentAimTarget = RageBotTarget
+    else
+        RageBotTarget = nil
+
+        if SilentAim.Options.Enabled then
+            CurrentAimTarget = getClosestSilentTarget()
+        else
+            CurrentAimTarget = nil
+        end
+    end
+
+    updateFOV()
+    updateSnapline()
+    updateTargetHUD(osClock())
+end
+
+local raycastHookInstalled = false
+local originalNamecall = nil
+
+local function isLikelyWeaponRayOrigin(origin)
+    local camera = Workspace.CurrentCamera
+
+    if camera
+        and (origin - camera.CFrame.Position).Magnitude <= 20
+    then
+        return true
+    end
+
+    if cachedRoot
+        and (origin - cachedRoot.Position).Magnitude <= 25
+    then
+        return true
+    end
+
+    return false
+end
+
+local function setupRaycastHook()
+    if raycastHookInstalled then
+        return true
+    end
+
+    if not Capabilities.hookmetamethod
+        or not Capabilities.getnamecallmethod
+    then
+        warn("[Potyzium] __namecall hook не поддерживается")
+        return false
+    end
+
+    local ok, hookError = pcall(function()
+        originalNamecall = Capabilities.hookmetamethod(
+            game,
+            "__namecall",
+            Capabilities.newcclosure(function(self, ...)
+                if not originalNamecall then
+                    return nil
+                end
+
+                if LibraryUnloaded then
+                    return originalNamecall(self, ...)
+                end
+
+                if Capabilities.checkcaller
+                    and Capabilities.checkcaller()
+                then
+                    return originalNamecall(self, ...)
+                end
+
+                local method = Capabilities.getnamecallmethod()
+
+                if method ~= "Raycast" or self ~= Workspace then
+                    return originalNamecall(self, ...)
+                end
+
+                local arguments = { ... }
+
+                local origin = arguments[1]
+                local direction = arguments[2]
+                local raycastParameters = arguments[3]
+
+                if typeof(origin) ~= "Vector3"
+                    or typeof(direction) ~= "Vector3"
+                then
+                    return originalNamecall(self, ...)
+                end
+
+                local magnitude = direction.Magnitude
+
+                if magnitude < 50 then
+                    return originalNamecall(self, ...)
+                end
+
+                if not isLikelyWeaponRayOrigin(origin) then
+                    return originalNamecall(self, ...)
+                end
+
+                local target = CurrentAimTarget
+
+                if not isValidTargetPart(target) then
+                    return originalNamecall(self, ...)
+                end
+
+                if RageBot.Options.Enabled then
+                    if RageBot.Options.VisibleCheck
+                        and not isVisibleFrom(origin, target)
+                    then
+                        return originalNamecall(self, ...)
+                    end
+                elseif SilentAim.Options.Enabled then
+                    if SilentAim.Options.WallCheck
+                        and not isVisibleFrom(origin, target)
+                    then
+                        return originalNamecall(self, ...)
+                    end
+                else
+                    return originalNamecall(self, ...)
+                end
+
+                local delta = target.Position - origin
+
+                if delta.Magnitude <= 0.001 then
+                    return originalNamecall(self, ...)
+                end
+
+                local redirectedDirection =
+                    delta.Unit * magnitude
+
+                return originalNamecall(
+                    self,
+                    origin,
+                    redirectedDirection,
+                    raycastParameters
+                )
+            end)
+        )
+    end)
+
+    if not ok or type(originalNamecall) ~= "function" then
+        originalNamecall = nil
+
+        warn(
+            "[Potyzium] Ошибка установки Raycast hook:",
+            tostring(hookError)
+        )
+
+        return false
+    end
+
+    raycastHookInstalled = true
+    return true
+end
+
+setupRaycastHook()
+
+local GunMods = {
+    Options = {
+        NoRecoil = false,
+        NoSpread = false,
+    },
+
+    RecoilHooked = false,
+    OriginalRecoil = nil,
+    OriginalSpreadValues = {},
+}
+
+local function getGCObjects()
+    if not Capabilities.getgc then
+        return nil
+    end
+
+    local ok, objects = pcall(Capabilities.getgc, true)
+
+    if not ok or type(objects) ~= "table" then
+        return nil
+    end
+
+    return objects
+end
+
+local function findGunRecoil()
+    if not Capabilities.islclosure
+        or type(debug) ~= "table"
+        or type(debug.getinfo) ~= "function"
+    then
+        return nil
+    end
+
+    local objects = getGCObjects()
+
+    if not objects then
+        return nil
+    end
+
+    for _, object in pairs(objects) do
+        if type(object) == "function"
+            and Capabilities.islclosure(object)
+        then
+            local ok, info = pcall(debug.getinfo, object)
+
+            if ok and info and info.name == "GunRecoil" then
+                return object
+            end
+        end
+    end
+
+    return nil
+end
+
+function GunMods:ApplyNoRecoil()
+    self.Options.NoRecoil = true
+
+    if self.RecoilHooked then
+        return true
+    end
+
+    if not Capabilities.hookfunction then
+        warn("[Potyzium] hookfunction недоступен")
+        return false
+    end
+
+    local recoilFunction = findGunRecoil()
+
+    if not recoilFunction then
+        warn("[Potyzium] GunRecoil не найден")
+        return false
+    end
+
+    local original
+
+    local ok, hookError = pcall(function()
+        original = Capabilities.hookfunction(
+            recoilFunction,
+            Capabilities.newcclosure(function(...)
+                if GunMods.Options.NoRecoil then
+                    return nil
+                end
+
+                return original(...)
+            end)
+        )
+    end)
+
+    if not ok or type(original) ~= "function" then
+        warn(
+            "[Potyzium] Не удалось установить NoRecoil:",
+            tostring(hookError)
+        )
+
+        return false
+    end
+
+    self.OriginalRecoil = original
+    self.RecoilHooked = true
+
+    return true
+end
+
+function GunMods:RemoveNoRecoil()
+    self.Options.NoRecoil = false
+end
+
+local function looksLikeSpreadTable(object)
+    if type(object) ~= "table" then
+        return false
+    end
+
+    local score = 0
+
+    if type(rawget(object, "SpreadMagnitude")) == "number" then
+        score += 1
+    end
+
+    if type(rawget(object, "SpreadRoll")) == "number" then
+        score += 1
+    end
+
+    if type(rawget(object, "ProjectileSpread")) == "number" then
+        score += 1
+    end
+
+    local nudgeX = rawget(object, "NudgeX")
+
+    if type(nudgeX) == "table"
+        and type(rawget(nudgeX, "Min")) == "number"
+        and type(rawget(nudgeX, "Max")) == "number"
+    then
+        score += 1
+    end
+
+    local nudgeY = rawget(object, "NudgeY")
+
+    if type(nudgeY) == "table"
+        and type(rawget(nudgeY, "Min")) == "number"
+        and type(rawget(nudgeY, "Max")) == "number"
+    then
+        score += 1
+    end
+
+    return score >= 2
+end
+
+local function getReadonlyState(object)
+    if not Capabilities.isreadonly then
+        return false
+    end
+
+    local ok, result = pcall(Capabilities.isreadonly, object)
+
+    return ok and result or false
+end
+
+local function setWritable(object)
+    local wasReadonly = getReadonlyState(object)
+
+    if wasReadonly and Capabilities.setreadonly then
+        pcall(Capabilities.setreadonly, object, false)
+    end
+
+    return wasReadonly
+end
+
+local function restoreReadonly(object, wasReadonly)
+    if wasReadonly and Capabilities.setreadonly then
+        pcall(Capabilities.setreadonly, object, true)
+    end
+end
+
+function GunMods:ApplyNoSpread()
+    self.Options.NoSpread = true
+
+    local objects = getGCObjects()
+
+    if not objects then
+        warn("[Potyzium] getgc недоступен")
+        return
+    end
+
+    for _, object in pairs(objects) do
+        if type(object) ~= "table" then
+            continue
+        end
+
+        if not looksLikeSpreadTable(object) then
+            continue
+        end
+
+        if self.OriginalSpreadValues[object] then
+            continue
+        end
+
+        local wasReadonly = setWritable(object)
+
+        local saved = {
+            __wasReadonly = wasReadonly,
+        }
+
+        local spreadMagnitude = rawget(object, "SpreadMagnitude")
+        local spreadRoll = rawget(object, "SpreadRoll")
+        local projectileSpread = rawget(object, "ProjectileSpread")
+        local oneSided = rawget(object, "OnesidedXNudge")
+        local recoverScale = rawget(object, "RecoverScale")
+
+        if type(spreadMagnitude) == "number" then
+            saved.SpreadMagnitude = spreadMagnitude
+            rawset(object, "SpreadMagnitude", 0)
+        end
+
+        if type(spreadRoll) == "number" then
+            saved.SpreadRoll = spreadRoll
+            rawset(object, "SpreadRoll", 0)
+        end
+
+        if type(projectileSpread) == "number" then
+            saved.ProjectileSpread = projectileSpread
+            rawset(object, "ProjectileSpread", 0)
+        end
+
+        if type(oneSided) == "number" then
+            saved.OnesidedXNudge = oneSided
+            rawset(object, "OnesidedXNudge", 0)
+        end
+
+        if type(recoverScale) == "number" then
+            saved.RecoverScale = recoverScale
+            rawset(object, "RecoverScale", 0)
+        end
+
+        local nudgeX = rawget(object, "NudgeX")
+
+        if type(nudgeX) == "table" then
+            local nudgeReadonly = setWritable(nudgeX)
+
+            saved.NudgeX = {
+                Min = rawget(nudgeX, "Min"),
+                Max = rawget(nudgeX, "Max"),
+                Readonly = nudgeReadonly,
+            }
+
+            if type(saved.NudgeX.Min) == "number" then
+                rawset(nudgeX, "Min", 0)
+            end
+
+            if type(saved.NudgeX.Max) == "number" then
+                rawset(nudgeX, "Max", 0)
+            end
+
+            restoreReadonly(nudgeX, nudgeReadonly)
+        end
+
+        local nudgeY = rawget(object, "NudgeY")
+
+        if type(nudgeY) == "table" then
+            local nudgeReadonly = setWritable(nudgeY)
+
+            saved.NudgeY = {
+                Min = rawget(nudgeY, "Min"),
+                Max = rawget(nudgeY, "Max"),
+                Readonly = nudgeReadonly,
+            }
+
+            if type(saved.NudgeY.Min) == "number" then
+                rawset(nudgeY, "Min", 0)
+            end
+
+            if type(saved.NudgeY.Max) == "number" then
+                rawset(nudgeY, "Max", 0)
+            end
+
+            restoreReadonly(nudgeY, nudgeReadonly)
+        end
+
+        self.OriginalSpreadValues[object] = saved
+        restoreReadonly(object, wasReadonly)
+    end
+end
+
+function GunMods:RemoveNoSpread()
+    self.Options.NoSpread = false
+
+    for object, saved in pairs(self.OriginalSpreadValues) do
+        pcall(function()
+            local wasReadonly = setWritable(object)
+
+            if saved.SpreadMagnitude ~= nil then
+                rawset(
+                    object,
+                    "SpreadMagnitude",
+                    saved.SpreadMagnitude
+                )
+            end
+
+            if saved.SpreadRoll ~= nil then
+                rawset(object, "SpreadRoll", saved.SpreadRoll)
+            end
+
+            if saved.ProjectileSpread ~= nil then
+                rawset(
+                    object,
+                    "ProjectileSpread",
+                    saved.ProjectileSpread
+                )
+            end
+
+            if saved.OnesidedXNudge ~= nil then
+                rawset(
+                    object,
+                    "OnesidedXNudge",
+                    saved.OnesidedXNudge
+                )
+            end
+
+            if saved.RecoverScale ~= nil then
+                rawset(object, "RecoverScale", saved.RecoverScale)
+            end
+
+            local nudgeX = rawget(object, "NudgeX")
+
+            if type(nudgeX) == "table" and saved.NudgeX then
+                local nudgeReadonly = setWritable(nudgeX)
+
+                if saved.NudgeX.Min ~= nil then
+                    rawset(nudgeX, "Min", saved.NudgeX.Min)
+                end
+
+                if saved.NudgeX.Max ~= nil then
+                    rawset(nudgeX, "Max", saved.NudgeX.Max)
+                end
+
+                restoreReadonly(
+                    nudgeX,
+                    saved.NudgeX.Readonly or nudgeReadonly
+                )
+            end
+
+            local nudgeY = rawget(object, "NudgeY")
+
+            if type(nudgeY) == "table" and saved.NudgeY then
+                local nudgeReadonly = setWritable(nudgeY)
+
+                if saved.NudgeY.Min ~= nil then
+                    rawset(nudgeY, "Min", saved.NudgeY.Min)
+                end
+
+                if saved.NudgeY.Max ~= nil then
+                    rawset(nudgeY, "Max", saved.NudgeY.Max)
+                end
+
+                restoreReadonly(
+                    nudgeY,
+                    saved.NudgeY.Readonly or nudgeReadonly
+                )
+            end
+
+            restoreReadonly(
+                object,
+                saved.__wasReadonly or wasReadonly
+            )
+        end)
+    end
+
+    table.clear(self.OriginalSpreadValues)
+end
+
+function GunMods:ToggleNoRecoil(enabled)
+    if enabled then
+        self:ApplyNoRecoil()
+    else
+        self:RemoveNoRecoil()
+    end
+end
+
+function GunMods:ToggleNoSpread(enabled)
+    if enabled then
+        self:ApplyNoSpread()
+    else
+        self:RemoveNoSpread()
+    end
+end
+
+addConnection(RunService.RenderStepped:Connect(function()
+    updateESP()
+    updateCombat()
+end))
+
+addConnection(RunService.Heartbeat:Connect(updateAutoFire))
+
+local Window = Library:CreateWindow({
+    Title = "Potyzium Hack",
+    Footer = "Vagrant Survival 1.0",
+    NotifySide = "Right",
+    ShowCustomCursor = true,
+})
+
+local Tabs = {
+    Visual = Window:AddTab("Visual", "eye"),
+    Combat = Window:AddTab("Combat", "swords"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
+}
+
+local VisualGroup =
+    Tabs.Visual:AddLeftGroupbox("ESP", "eye")
+
+VisualGroup:AddToggle("ESPEnabled", {
+    Text = "Enable ESP",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.Enabled = value
+
+        if not value then
+            for _, object in pairs(espCache) do
+                hideESP(object, true)
+            end
+        end
+    end,
+})
+
+VisualGroup:AddToggle("ESPBox", {
+    Text = "Box ESP",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.Box = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPBoxFill", {
+    Text = "Box Fill",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.BoxFill = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPName", {
+    Text = "Name ESP",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.Name = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPDistance", {
+    Text = "Distance ESP",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.Distance = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPHealthBar", {
+    Text = "Health Bar",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.HealthBar = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPChams", {
+    Text = "Chams",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.Chams = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPTeamColor", {
+    Text = "Team Color",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.TeamColor = value
+    end,
+})
+
+VisualGroup:AddToggle("ESPIgnoreTeam", {
+    Text = "Ignore Team",
+    Default = false,
+    Callback = function(value)
+        ESP.Options.IgnoreTeam = value
+    end,
+})
+
+VisualGroup:AddSlider("ESPFillTransparency", {
+    Text = "Fill Transparency",
+    Default = 0.7,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(value)
+        ESP.Settings.FillTransparency = value
+    end,
+})
+
+VisualGroup:AddSlider("ESPMaxDistance", {
+    Text = "Max Distance",
+    Default = 10000,
+    Min = 100,
+    Max = 10000,
+    Rounding = 0,
+    Callback = function(value)
+        ESP.Settings.MaxDistance = value
+        ESP.Settings.MaxDistanceSquared = value * value
+    end,
+})
+
+local SilentGroup =
+    Tabs.Combat:AddLeftGroupbox("Silent Aim")
+
+SilentGroup:AddToggle("SilentAimEnabled", {
+    Text = "Enable Silent Aim",
+    Default = false,
+    Callback = function(value)
+        SilentAim.Options.Enabled = value
+
+        if not value and not RageBot.Options.Enabled then
+            CurrentAimTarget = nil
+        end
+
+        updateFOV()
+    end,
+})
+
+SilentGroup:AddToggle("SilentAimWallCheck", {
+    Text = "Wall Check",
+    Tooltip = "Перенаправлять луч только при прямой видимости цели",
+    Default = false,
+    Callback = function(value)
+        SilentAim.Options.WallCheck = value
+    end,
+})
+
+SilentGroup:AddToggle("SilentAimIgnoreTeam", {
+    Text = "Ignore Team",
+    Default = true,
+    Callback = function(value)
+        SilentAim.Options.IgnoreTeam = value
+    end,
+})
+
+SilentGroup:AddDropdown("SilentAimTargetPart", {
+    Text = "Target Part",
+    Values = {
+        "Head",
+        "HumanoidRootPart",
+        "UpperTorso",
+    },
+    Default = "HumanoidRootPart",
+    Callback = function(value)
+        SilentAim.Settings.TargetPart = value
+    end,
+})
+
+SilentGroup:AddDropdown("SilentAimPriority", {
+    Text = "Priority",
+    Values = {
+        "Crosshair",
+        "Distance",
+    },
+    Default = "Crosshair",
+    Callback = function(value)
+        SilentAim.Options.Priority = value
+    end,
+})
+
+local UseFOVToggle = SilentGroup:AddToggle("SilentAimUseFOV", {
+    Text = "Use FOV",
+    Default = false,
+    Callback = function(value)
+        SilentAim.Options.UseFOV = value
+        updateFOV()
+    end,
+})
+
+UseFOVToggle:AddColorPicker("FOVNoTargetColor", {
+    Default = SilentAim.Colors.FOVNoTarget,
+    Title = "No Target Color",
+    Callback = function(value)
+        SilentAim.Colors.FOVNoTarget = value
+    end,
+})
+
+UseFOVToggle:AddColorPicker("FOVOnTargetColor", {
+    Default = SilentAim.Colors.FOVOnTarget,
+    Title = "On Target Color",
+    Callback = function(value)
+        SilentAim.Colors.FOVOnTarget = value
+    end,
+})
+
+UseFOVToggle:AddColorPicker("FOVStaticColor", {
+    Default = SilentAim.Colors.FOV,
+    Title = "Static Color",
+    Callback = function(value)
+        SilentAim.Colors.FOV = value
+    end,
+})
+
+SilentGroup:AddDropdown("FOVMode", {
+    Text = "FOV Mode",
+    Values = {
+        "Dynamic",
+        "Static",
+    },
+    Default = "Dynamic",
+    Callback = function(value)
+        SilentAim.Options.FOVMode = value
+        updateFOV()
+    end,
+})
+
+SilentGroup:AddSlider("SilentAimFOVRadius", {
+    Text = "FOV Radius",
+    Default = 150,
+    Min = 25,
+    Max = 800,
+    Rounding = 0,
+    Callback = function(value)
+        SilentAim.Settings.FOVRadius = value
+        SilentAim.Settings.FOVRadiusSquared = value * value
+        updateFOV()
+    end,
+})
+
+SilentGroup:AddSlider("SilentAimFOVThickness", {
+    Text = "FOV Thickness",
+    Default = 2,
+    Min = 1,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(value)
+        SilentAim.Settings.FOVThickness = value
+        updateFOV()
+    end,
+})
+
+SilentGroup:AddSlider("SilentAimMaxDistance", {
+    Text = "Max Distance",
+    Default = 500,
+    Min = 50,
+    Max = 5000,
+    Rounding = 0,
+    Callback = function(value)
+        SilentAim.Settings.MaxDistance = value
+        SilentAim.Settings.MaxDistanceSquared = value * value
+    end,
+})
+
+local SnaplineToggle =
+    SilentGroup:AddToggle("SilentAimSnapline", {
+        Text = "Snapline",
+        Default = false,
+        Callback = function(value)
+            SilentAim.Options.Snapline = value
+        end,
+    })
+
+SnaplineToggle:AddColorPicker("SnaplineColor", {
+    Default = SilentAim.Colors.Snapline,
+    Title = "Snapline Color",
+    Callback = function(value)
+        SilentAim.Colors.Snapline = value
+    end,
+})
+
+SilentGroup:AddSlider("SnaplineThickness", {
+    Text = "Snapline Thickness",
+    Default = 2,
+    Min = 1,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(value)
+        SilentAim.Settings.SnaplineThickness = value
+    end,
+})
+
+SilentGroup:AddToggle("SilentAimTargetHUD", {
+    Text = "Target HUD",
+    Default = false,
+    Callback = function(value)
+        SilentAim.Options.TargetHUD = value
+
+        if not value then
+            TargetGui.Enabled = false
+        end
+    end,
+})
+
+local RageGroup =
+    Tabs.Combat:AddRightGroupbox("Rage Bot")
+
+RageGroup:AddToggle("RageBotEnabled", {
+    Text = "Enable Rage Bot",
+    Default = false,
+    Callback = function(value)
+        RageBot.Options.Enabled = value
+
+        if not value then
+            RageBotTarget = nil
+
+            shotGeneration += 1
+            releaseFireInput()
+            fireBusy = false
+        end
+    end,
+})
+
+RageGroup:AddToggle("RageBotAutoFire", {
+    Text = "Auto Fire",
+    Tooltip = "Стреляет с заданным RPM только при наличии валидной цели",
+    Default = false,
+    Callback = function(value)
+        RageBot.Options.AutoFire = value
+
+        if not value then
+            shotGeneration += 1
+            releaseFireInput()
+            fireBusy = false
+        else
+            lastShotTime = 0
+        end
+    end,
+})
+
+RageGroup:AddToggle("RageBotVisibleCheck", {
+    Text = "Visible Check",
+    Tooltip = "Не выбирать и не атаковать цель за препятствием",
+    Default = true,
+    Callback = function(value)
+        RageBot.Options.VisibleCheck = value
+    end,
+})
+
+RageGroup:AddToggle("RageBotIgnoreTeam", {
+    Text = "Ignore Team",
+    Default = true,
+    Callback = function(value)
+        RageBot.Options.IgnoreTeam = value
+    end,
+})
+
+RageGroup:AddDropdown("RageBotTargetPart", {
+    Text = "Target Part",
+    Values = {
+        "Head",
+        "HumanoidRootPart",
+        "UpperTorso",
+    },
+    Default = "Head",
+    Callback = function(value)
+        RageBot.Settings.TargetPart = value
+    end,
+})
+
+RageGroup:AddDropdown("AutoFireInputMode", {
+    Text = "AutoFire Input",
+    Values = {
+        "Hybrid",
+        "MouseClick",
+        "VirtualInput",
+        "Tool",
+    },
+    Default = "Hybrid",
+    Callback = function(value)
+        RageBot.Settings.InputMode = value
+    end,
+})
+
+RageGroup:AddSlider("AutoFireRPM", {
+    Text = "AutoFire RPM",
+    Default = 600,
+    Min = 60,
+    Max = 1500,
+    Rounding = 0,
+    Callback = function(value)
+        RageBot.Settings.AutoFireRPM = value
+    end,
+})
+
+RageGroup:AddSlider("AutoFireHoldTime", {
+    Text = "Input Hold Time",
+    Default = 0.02,
+    Min = 0.01,
+    Max = 0.15,
+    Rounding = 2,
+    Callback = function(value)
+        RageBot.Settings.HoldTime = value
+    end,
+})
+
+RageGroup:AddSlider("RageBotMaxDistance", {
+    Text = "Max Distance",
+    Default = 500,
+    Min = 50,
+    Max = 5000,
+    Rounding = 0,
+    Callback = function(value)
+        RageBot.Options.MaxDistance = value
+        RageBot.Options.MaxDistanceSquared = value * value
+    end,
+})
+
+local GunModsGroup =
+    Tabs.Combat:AddRightGroupbox("Weapons Mod", "gun")
+
+GunModsGroup:AddToggle("NoRecoil", {
+    Text = "No Recoil",
+    Default = false,
+    Callback = function(value)
+        GunMods:ToggleNoRecoil(value)
+    end,
+})
+
+GunModsGroup:AddToggle("NoSpread", {
+    Text = "No Spread",
+    Default = false,
+    Callback = function(value)
+        GunMods:ToggleNoSpread(value)
+    end,
+})
+
+local function cleanup()
+    if CleanupPerformed then
+        return
+    end
+
+    CleanupPerformed = true
+    LibraryUnloaded = true
+
+    RageBot.Options.Enabled = false
+    RageBot.Options.AutoFire = false
+    SilentAim.Options.Enabled = false
+    ESP.Options.Enabled = false
+
+    CurrentAimTarget = nil
+    RageBotTarget = nil
+
+    shotGeneration += 1
+    releaseFireInput()
+    fireBusy = false
+
+    GunMods:RemoveNoRecoil()
+    GunMods:RemoveNoSpread()
+
+    if currentHealthTween then
+        pcall(function()
+            currentHealthTween:Cancel()
+        end)
+
+        currentHealthTween = nil
+    end
+
+    disconnectConnections()
+    ESP:Destroy()
+
+    if snapline then
+        pcall(function()
+            snapline:Remove()
+        end)
+
+        snapline = nil
+    end
+
+    pcall(function()
+        fovScreenGui:Destroy()
+    end)
+
+    pcall(function()
+        TargetGui:Destroy()
+    end)
+
+    table.clear(playerCache)
+    table.clear(thumbnailCache)
+end
+
+local MenuGroup =
+    Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
+
+MenuGroup:AddToggle("KeybindMenuOpen", {
+    Default = Library.KeybindFrame.Visible,
+    Text = "Open Keybind Menu",
+    Callback = function(value)
+        Library.KeybindFrame.Visible = value
+    end,
+})
+
+MenuGroup:AddToggle("ShowCustomCursor", {
+    Text = "Custom Cursor",
+    Default = true,
+    Callback = function(value)
+        Library.ShowCustomCursor = value
+    end,
+})
+
+MenuGroup:AddDropdown("NotificationSide", {
+    Values = {
+        "Left",
+        "Right",
+    },
+    Default = "Right",
+    Text = "Notification Side",
+    Callback = function(value)
+        Library:SetNotifySide(value)
+    end,
+})
+
+MenuGroup:AddDropdown("DPIDropdown", {
+    Values = {
+        "50%",
+        "75%",
+        "100%",
+        "125%",
+        "150%",
+        "175%",
+        "200%",
+    },
+    Default = "75%",
+    Text = "DPI Scale",
+    Callback = function(value)
+        local number = tonumber(value:gsub("%%", ""))
+
+        if number then
+            Library:SetDPIScale(number)
+        end
+    end,
+})
+
+MenuGroup:AddDivider()
+
+MenuGroup:AddLabel("Menu bind")
+    :AddKeyPicker("MenuKeybind", {
+        Default = "RightShift",
+        NoUI = true,
+        Text = "Menu keybind",
+    })
+
+MenuGroup:AddButton("Unload", function()
+    cleanup()
+    Library:Unload()
+end)
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({
+    "MenuKeybind",
+})
+
+ThemeManager:SetFolder("MyScriptHub")
+SaveManager:SetFolder("MyScriptHub/specific-game")
+
+SaveManager:BuildConfigSection(Tabs["UI Settings"])
+ThemeManager:ApplyToTab(Tabs["UI Settings"])
+
+Library:SetDPIScale(75)
+
+Library:OnUnload(cleanup)
+
+SaveManager:LoadAutoloadConfig()
